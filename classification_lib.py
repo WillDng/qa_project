@@ -1,4 +1,6 @@
 import re
+from sklearn.feature_extraction.text import  TfidfVectorizer
+
 
 def clean_text_re(text, compiled_re):
     """Returns cleaned text after applying regular expression function"""
@@ -19,8 +21,8 @@ def encoder_re(text, compiled_re):
 from nltk import word_tokenize          
 from nltk.stem import WordNetLemmatizer 
 
-class LemmaTokenizer:
-    def __init__(self):
-        self.wnl = WordNetLemmatizer()
-    def __call__(self, doc):
-        return [self.wnl.lemmatize(t) for t in word_tokenize(doc)]
+class LemmaTfidfVectorizer(TfidfVectorizer):
+    def build_tokenizer(self):
+        tokenize = super().build_tokenizer()
+        lemmatizer = WordNetLemmatizer()
+        return lambda doc: [lemmatizer.lemmatize(t) for t in tokenize(doc)]
