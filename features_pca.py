@@ -13,23 +13,28 @@ train = pd.read_csv('data/train.csv')
 
 X_question = train.question_body
 X_answer = train.answer
-
+X_title = train.question_title
 
 # using sublinear_tf=True to bring the feature values
 # closer to a Gaussian distribution, compensating for LSA’s
 # erroneous assumptions about textual data
-answer_tfidftransformer = TfidfVectorizer(sublinear_tf=True)
+tfidftransformer = cl.LemmaTfidfVectorizer(
+    sublinear_tf=True,
+    stop_words=stop_words,
+    min_df=0.015,
+    max_df=0.8,
+    ngram_range=(1,2)
+)
 
-answer_tfidftransformed = answer_tfidftransformer.fit_transform(X_answer)
-question_tfidftransformed = answer_tfidftransformer.transform(X_question)
+answer_tfidftransformed = tfidftransformer.fit_transform(X_answer)
 
-n_components = 4000
+n_components = 400
 answer_pca = TruncatedSVD(n_components=n_components)
 answer_pca.fit(answer_tfidftransformed)
 
 plt.figure()
 plt.xlim(0, n_components)
-plt.axhline(y=0.9, color='r', linestyle='--')
+plt.axhline(y=0.8, color='r', linestyle='--')
 plt.plot(answer_pca.explained_variance_ratio_.cumsum())
 answer_plot_title = 'answer features pca'
 plt.title(answer_plot_title)
@@ -43,13 +48,15 @@ answer_joblib_fn = answer_save_fn+'.joblib'
 answer_joblib_path = joblib_dir+answer_joblib_fn
 joblib.dump(answer_pca, answer_joblib_path)
 
-n_components = 3000
+question_tfidftransformed = tfidftransformer.transform(X_question)
+
+n_components = 400
 question_pca = TruncatedSVD(n_components=n_components)
 question_pca.fit(question_tfidftransformed)
 
 plt.figure()
 plt.xlim(0, n_components)
-plt.axhline(y=0.9, color='r', linestyle='--')
+plt.axhline(y=0.8, color='r', linestyle='--')
 plt.plot(question_pca.explained_variance_ratio_.cumsum())
 question_plot_title = 'question features pca' 
 plt.title(question_plot_title)
@@ -66,3 +73,19 @@ question_joblib_path = joblib_dir + question_joblib_fn
 joblib.dump(question_pca, question_joblib_path)
 
 # best_features_question = [vocab[i] for i in pca2.components_[0].argsort()[::-1]]    
+title_tfidftransformed = tfidftransformer.transform(X_title)
+
+n_components = 20
+title_pca = TruncatedSVD(n_components=n_components)
+title_pca.fit(title_tfidftransformed)
+
+plt.figure()
+plt.xlim(0, n_components)
+plt.axhline(y=0.8, color='r', linestyle='--')
+plt.plot(title_pca.explained_variance_ratio_.cumsum())
+title_plot_title = 'title features pca' 
+plt.title(title_plot_title)
+title_save_fn = '_'.join(title_plot_title.split()) +\
+                   '_' + str(n_components)
+plt.savefig(plots_dir+title_save_fn)
+
