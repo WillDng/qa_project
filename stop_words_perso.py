@@ -1,3 +1,4 @@
+
 stop_words_to_remove = [
     'among',
     'amongst',
@@ -49,4 +50,91 @@ stop_words_to_remove = [
     'why',
     'yourself',
     'yourselves'
-    ]
+]
+
+question_cs_words = [
+    'android',
+    'app',
+    'browser',
+    'class',
+    'click',
+    'code',
+    'command',
+    'computer',
+    'database',
+    'default',
+    'directory',
+    'div',
+    'folder',
+    'format',
+    'google',
+    'html',
+    'http',
+    'import',
+    'index',
+    'instance',
+    'int',
+    'java',
+    'javascript',
+    'linux',
+    'load',
+    'local',
+    'log',
+    'loop',
+    'machine',
+    'main',
+    'map',
+    'memory',
+    'message',
+    'method',
+    'mode',
+    'model',
+    'module',
+    'network',
+    'null',
+    'number',
+    'object',
+    'online',
+    'package',
+    'password',
+    'path',
+    'php',
+    'print',
+    'private',
+    'process',
+    'program',
+    'public',
+    'query',
+    'script',
+    'server',
+    'software',
+    'sql',
+    'static',
+    'string',
+    'ubuntu',
+    'url',
+    'var',
+    'version',
+    'void',
+    'web',
+    'website',
+    'xml',
+]
+
+answer_cs_words = [
+    'array'
+    'gt',
+    'id',
+    'j',
+    'lt',
+    'o',
+]
+
+cs_stop_words = question_cs_words + answer_cs_words
+
+generated_during_tokenizing = [
+    'ha',
+    'le',
+    'u',
+    'wa'
+]
