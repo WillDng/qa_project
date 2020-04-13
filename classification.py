@@ -13,9 +13,11 @@ from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import  TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.decomposition import TruncatedSVD
 
 import classification_lib as cl
 import stop_words_perso as swp 
+import mispell_dict as md
 
 train = pd.read_csv('data/train.csv')
 
@@ -29,8 +31,6 @@ y_transformed = y.apply(lambda x: pd.cut(x,
 # séparation en cas d'études séparés sur les questions ou answers
 y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
 y_answer = y_transformed.loc[:, y_transformed.columns.str.startswith('answer')]
-
-
 
 to_delete_var = ['qa_id', 'url',
                  'question_user_name', 'question_user_page',
@@ -55,6 +55,10 @@ numbers_re = re.compile(r'\d\.*\d*')
 
 question_numbers = X_question.apply(lambda x: cl.encoder_re(x, numbers_re))   
 answer_numbers = X_answer.apply(lambda x: cl.encoder_re(x, numbers_re))
+title_numbers = X_title.apply(lambda x: cl.encoder_re(x, numbers_re))
+
+X_question = X_question.apply(lambda x: cl.clean_text_re(x, numbers_re))
+X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, numbers_re))
 
 link_re = re.compile(r'www[^\s]*(?=\s)|http[^\s]*(?=\s)')
 
@@ -72,46 +76,84 @@ answer_demonstrations = X_answer.apply(lambda x: cl.encoder_re(x, demonstration_
 X_question = X_question.apply(lambda x: cl.clean_text_re(x, demonstration_re))
 X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, demonstration_re))
 
+X_question = X_question.apply(lambda x: md.correct_mispell(x))
+X_answer = X_answer.apply(lambda x: md.correct_mispell(x))
 
+# TODO: densité de ponctuation ?
 question_mark = re.compile(r'\?')
+
+# OHE avec drop first et au format sparse
+ohe = OneHotEncoder(drop='first')
+X_category = ohe.fit_transform(X[['category', 'host']])
+
+# TODO: séparer les échantillons d'apprentissage et de test avant 
+# les transformations pour éviter trop d'overfitting
 
 stop_words = list(txt.ENGLISH_STOP_WORDS)
 for words in swp.stop_words_to_remove:
     stop_words.remove(words)
+stop_words += swp.cs_stop_words \
+              + swp.generated_during_tokenizing
 
-# OHE avec drop first et au format sparse
-ohe = OneHotEncoder(drop='first', sparse=True)
-X_category = ohe.fit_transform(X[['category', 'host']])
+tfidftransformer = cl.LemmaTfidfVectorizer(
+    sublinear_tf=True,
+    stop_words=stop_words,
+    min_df=0.015,
+    max_df=0.8,
+    ngram_range=(1,2)
+)
 
-# TF-IDF transformer sans stop-words pour l'instant
-answer_tfidftransformer = TfidfVectorizer(sublinear_tf=True,
-                                          tokenizer=cl.LemmaTokenizer(),
-                                          stop_words=stop_words)
+answer_tfidftransformed = tfidftransformer.fit_transform(X_answer)
 
-# fit sur les answers (possède plus de vocabulaire)
-answer_tfidftransformed = answer_tfidftransformer.fit_transform(X_answer)
+# TODO: automatiser la récupératin du seuil ?
+n_components = 275
+answer_pca = TruncatedSVD(n_components=n_components)
+answer_tfidftransformed_acp = answer_pca.fit_transform(answer_tfidftransformed)
 
 # transformation sur le titre et les answers
-question_tfidftransformed = answer_tfidftransformer.transform(X_question)
-title_tfidftransformed = answer_tfidftransformer.transform(X_title)
+question_tfidftransformed = tfidftransformer.fit_transform(X_question)
+
+n_components = 251
+question_pca = TruncatedSVD(n_components=n_components)
+question_tfidftransformed_acp = question_pca.fit_transform(question_tfidftransformed)
+
+title_tfidftransformed = tfidftransformer.fit_transform(X_title)
+
+n_components = 15
+title_pca = TruncatedSVD(n_components=n_components)
+title_tfidftransformed_acp = title_pca.fit_transform(question_tfidftransformed)
 
 # degré de proximité entre title/answer et question/answer
-title_answer_similarity = cosine_similarity(title_tfidftransformed, answer_tfidftransformed).diagonal()
-title_question_similarity = cosine_similarity(title_tfidftransformed, question_tfidftransformed).diagonal()
-question_answer_similarity = cosine_similarity(question_tfidftransformed, answer_tfidftransformed).diagonal()
+# TODO : refaire la similarité, les matrices n'ont plus la même taille.
+# il faudra probablement récupérer le vocabulaire commun pour fitter et transformer
+# title_answer_similarity = cosine_similarity(title_tfidftransformed, 
+#                                             answer_tfidftransformed).diagonal()
+# title_question_similarity = cosine_similarity(title_tfidftransformed, 
+#                                               question_tfidftransformed).diagonal()
+# question_answer_similarity = cosine_similarity(question_tfidftransformed, 
+#                                                answer_tfidftransformed).diagonal()
 
-try:
-    question_acp = joblib.load(joblib_dir+'question_features_pca_3000.joblib')
-    answer_acp = joblib.load(joblib_dir+'answer_features_pca_4000.joblib')
-except FileNotFoundError:
-    raise('jblib file not found, run script first')
-
-question_tfidftransformed_acp = question_acp.transform(question_tfidftransformed)
-answer_tfidftransformed_acp = answer_acp.transform(answer_tfidftransformed)
-
-X_transformed = sp.hstack([question_tfidftransformed_acp, 
-                           answer_tfidftransformed_acp,
-                           X_category])
+X_transformed = pd.concat([
+    question_nblines,
+    answer_nblines,
+    question_nbchars,
+    answer_nbchars,
+    title_nbchars,
+    question_numbers,
+    answer_numbers,
+    title_numbers,
+    question_links,
+    answer_links,
+    question_demonstrations,
+    answer_demonstrations,
+    # title_answer_similarity,
+    # title_question_similarity,
+    # question_answer_similarity,
+    title_tfidftransformed_acp,
+    question_tfidftransformed_acp, 
+    answer_tfidftransformed_acp,
+    X_category
+])
 
 X_train, X_test, y_train, y_test = train_test_split(X_transformed,
                                                     y_transformed,
