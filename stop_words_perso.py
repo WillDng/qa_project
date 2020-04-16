@@ -136,5 +136,9 @@ generated_during_tokenizing = [
     'ha',
     'le',
     'u',
-    'wa'
+    'wa',
+    'amp',
+    'id',
+    'fi',
+    'one'
 ]
