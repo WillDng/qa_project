@@ -14,6 +14,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import  TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import TruncatedSVD
+from sklearn.pipeline import Pipeline, make_pipeline, make_union
+from sklearn.compose import make_column_transformer
 
 import classification_lib as cl
 import stop_words_perso as swp 
@@ -41,17 +43,47 @@ X_title = train.question_title
 X_question = train.question_body
 X_answer = train.answer
 
-# extraction du nombre de lignes avec passage à la ligne comme proxy
-linebreak_re = re.compile(r'\\n')
-question_nblines = X_question.apply(lambda x: len(linebreak_re.findall(x)))
-answer_nblines = X_question.apply(lambda x: len(linebreak_re.findall(x)))
+# nombre de lignes avec passage à la ligne comme proxy
+linebreak_re = re.compile(r'\n')
+# longueur/verbosité avec nombre de caractères comme proxy
+chars_re = re.compile('.')
 
-# extraction du nombre de la longueur/verbosité avec nombre de caractères comme proxy
+numbers_re = re.compile(r'\d\.?\d*')
+links_re = re.compile(r'www[^\s]*(?=\s)|http[^\s]*(?=\s)')
+demonstrations_re = re.compile(r'(?<=\n).*[&\^=\+\_\[\]\{\}\\\|]+.*(?=\n)')
+
+count_encoder_union = make_union(
+    cl.PatternCounter(chars_re),
+    cl.PatternEncoder(numbers_re),
+    cl.PatternEncoder(links_re),
+    cl.PatternEncoder(demonstrations_re)
+)
+
+full_count_encoder_union = make_union(
+    cl.PatternCounter(linebreak_re),
+    count_encoder_union
+)
+
+question_features = count_encoder_union.transform(X_question)
+answer_features = count_encoder_union.transform(X_answer)
+
+cleaner_pipeline = make_pipeline(
+    cl.PatternRemover(numbers_re),
+    cl.PatternRemover(links_re),
+    cl.PatternRemover(demonstrations_re),
+    cl.SpellingCorrecter(md.mispell_dict)  
+)
+
+ct = make_column_transformer(
+    (count_encoder_union, ['question_title']),
+    (full_count_encoder_union, ['question_body']),
+    (full_count_encoder_union, ['answer']),
+    (OneHotEncoder(drop='first'), ['category', 'host'])
+)
+
 question_nbchars = X_question.apply(lambda x: len(x))
 answer_nbchars = X_answer.apply(lambda x: len(x))
 title_nbchars = X_title.apply(lambda x: len(x))
-
-numbers_re = re.compile(r'\d\.*\d*') 
 
 question_numbers = X_question.apply(lambda x: cl.encoder_re(x, numbers_re))   
 answer_numbers = X_answer.apply(lambda x: cl.encoder_re(x, numbers_re))
@@ -60,21 +92,19 @@ title_numbers = X_title.apply(lambda x: cl.encoder_re(x, numbers_re))
 X_question = X_question.apply(lambda x: cl.clean_text_re(x, numbers_re))
 X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, numbers_re))
 
-link_re = re.compile(r'www[^\s]*(?=\s)|http[^\s]*(?=\s)')
 
-question_links = X_question.apply(lambda x: cl.encoder_re(x, link_re))
-answer_links = X_answer.apply(lambda x: cl.encoder_re(x, link_re))
 
-X_question = X_question.apply(lambda x: cl.clean_text_re(x, link_re))
-X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, link_re))
+question_links = X_question.apply(lambda x: cl.encoder_re(x, links_re))
+answer_links = X_answer.apply(lambda x: cl.encoder_re(x, links_re))
 
-demonstration_re = re.compile(r'(?<=\n).*[&\^=\+\_\[\]\{\}\\\|]+.*(?=\n)')
+X_question = X_question.apply(lambda x: cl.clean_text_re(x, links_re))
+X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, links_re))
 
-question_demonstrations = X_question.apply(lambda x: cl.encoder_re(x, demonstration_re))
-answer_demonstrations = X_answer.apply(lambda x: cl.encoder_re(x, demonstration_re))
+question_demonstrations = X_question.apply(lambda x: cl.encoder_re(x, demonstrations_re))
+answer_demonstrations = X_answer.apply(lambda x: cl.encoder_re(x, demonstrations_re))
 
-X_question = X_question.apply(lambda x: cl.clean_text_re(x, demonstration_re))
-X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, demonstration_re))
+X_question = X_question.apply(lambda x: cl.clean_text_re(x, demonstrations_re))
+X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, demonstrations_re))
 
 X_question = X_question.apply(lambda x: md.correct_mispell(x))
 X_answer = X_answer.apply(lambda x: md.correct_mispell(x))

@@ -64,9 +64,3 @@ mispell_dict = {"aren't" : "are not",
                 "we'll":" will",
                 "didn't": "did not", 
                 "tryin'":"trying"}
-
-def correct_mispell(txt):
-    txt = txt.lower().split()
-    txt = [(mispell_dict[m] if m in mispell_dict.keys() else m) for m in txt]
-    txt = " ".join(txt)
-    return txt
