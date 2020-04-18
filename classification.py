@@ -44,80 +44,71 @@ X_question = train.question_body
 X_answer = train.answer
 
 # nombre de lignes avec passage à la ligne comme proxy
-linebreak_re = re.compile(r'\n')
+linebreak_re = r'\n'
 # longueur/verbosité avec nombre de caractères comme proxy
-chars_re = re.compile('.')
+chars_re = r'.'
 
-numbers_re = re.compile(r'\d\.?\d*')
-links_re = re.compile(r'www[^\s]*(?=\s)|http[^\s]*(?=\s)')
-demonstrations_re = re.compile(r'(?<=\n).*[&\^=\+\_\[\]\{\}\\\|]+.*(?=\n)')
+numbers_re = r'\d\.?\d*'
+links_re = r'www[^\s]*(?=\s)|http[^\s]*(?=\s)'
+demonstrations_re = r'(?<=\n).*[&\^=\+\_\[\]\{\}\\\|]+.*(?=\n)'
+belonging_re = r'\'s'
+# TODO: densité de ponctuation ?
+# question_mark = r'\?'
+
 
 count_encoder_union = make_union(
     cl.PatternCounter(chars_re),
     cl.PatternEncoder(numbers_re),
     cl.PatternEncoder(links_re),
-    cl.PatternEncoder(demonstrations_re)
+    cl.PatternEncoder(demonstrations_re),
+    verbose=True
 )
 
 full_count_encoder_union = make_union(
     cl.PatternCounter(linebreak_re),
-    count_encoder_union
+    count_encoder_union,
+    verbose=True
 )
-
-question_features = count_encoder_union.transform(X_question)
-answer_features = count_encoder_union.transform(X_answer)
 
 cleaner_pipeline = make_pipeline(
     cl.PatternRemover(numbers_re),
     cl.PatternRemover(links_re),
     cl.PatternRemover(demonstrations_re),
-    cl.SpellingCorrecter(md.mispell_dict)  
+    cl.PatternRemover(belonging_re),
+    cl.SpellingCorrecter(),
+    verbose=True
 )
 
-ct = make_column_transformer(
+cleaner_count_encoder_ct = make_column_transformer(
+    ('passthrough', ['question_title']),
+    (cleaner_pipeline, ['question_body']),
+    (cleaner_pipeline, ['answer']),
+    ('passthrough', ['category', 'host']),
     (count_encoder_union, ['question_title']),
     (full_count_encoder_union, ['question_body']),
     (full_count_encoder_union, ['answer']),
-    (OneHotEncoder(drop='first'), ['category', 'host'])
+    remainder='drop',
+    verbose=True
 )
 
-question_nbchars = X_question.apply(lambda x: len(x))
-answer_nbchars = X_answer.apply(lambda x: len(x))
-title_nbchars = X_title.apply(lambda x: len(x))
+X_transformed = pd.DataFrame(
+    data=cleaner_count_encoder_ct.fit_transform(train),
+    columns=[
+        'question_title', 'question_body', 'answer',
+        'category', 'host',
+        'title_chars',  'title_num', 'title_links', 'title_demo',
+        'question_linebreak', 'question_chars', 'question_num', 
+        'question_links', 'question_demo',
+        'answer_linebreak', 'answer_chars', 'answer_num', 
+        'answer_links', 'answer_demo'
+    ]
+)
 
-question_numbers = X_question.apply(lambda x: cl.encoder_re(x, numbers_re))   
-answer_numbers = X_answer.apply(lambda x: cl.encoder_re(x, numbers_re))
-title_numbers = X_title.apply(lambda x: cl.encoder_re(x, numbers_re))
-
-X_question = X_question.apply(lambda x: cl.clean_text_re(x, numbers_re))
-X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, numbers_re))
-
-
-
-question_links = X_question.apply(lambda x: cl.encoder_re(x, links_re))
-answer_links = X_answer.apply(lambda x: cl.encoder_re(x, links_re))
-
-X_question = X_question.apply(lambda x: cl.clean_text_re(x, links_re))
-X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, links_re))
-
-question_demonstrations = X_question.apply(lambda x: cl.encoder_re(x, demonstrations_re))
-answer_demonstrations = X_answer.apply(lambda x: cl.encoder_re(x, demonstrations_re))
-
-X_question = X_question.apply(lambda x: cl.clean_text_re(x, demonstrations_re))
-X_answer = X_answer.apply(lambda x: cl.clean_text_re(x, demonstrations_re))
-
-X_question = X_question.apply(lambda x: md.correct_mispell(x))
-X_answer = X_answer.apply(lambda x: md.correct_mispell(x))
-
-# TODO: densité de ponctuation ?
-question_mark = re.compile(r'\?')
-
-# OHE avec drop first et au format sparse
-ohe = OneHotEncoder(drop='first')
-X_category = ohe.fit_transform(X[['category', 'host']])
-
-# TODO: séparer les échantillons d'apprentissage et de test avant 
-# les transformations pour éviter trop d'overfitting
+X_train, X_test, y_train, y_test = train_test_split(
+    X_transformed,
+    y_transformed,
+    test_size=0.15
+)
 
 stop_words = list(txt.ENGLISH_STOP_WORDS)
 for words in swp.stop_words_to_remove:
@@ -129,29 +120,43 @@ tfidftransformer = cl.LemmaTfidfVectorizer(
     sublinear_tf=True,
     stop_words=stop_words,
     min_df=0.015,
-    max_df=0.8,
+    max_df=0.85,
     ngram_range=(1,2)
 )
 
-answer_tfidftransformed = tfidftransformer.fit_transform(X_answer)
+title_tfidf_acp_pipe = make_pipeline(
+    cl.Squeezer(),
+    tfidftransformer,
+    TruncatedSVD(n_components=15),
+    verbose=True
+)
 
-# TODO: automatiser la récupératin du seuil ?
-n_components = 275
-answer_pca = TruncatedSVD(n_components=n_components)
-answer_tfidftransformed_acp = answer_pca.fit_transform(answer_tfidftransformed)
+question_tfidf_acp_pipe = make_pipeline(
+    cl.Squeezer(),
+    tfidftransformer,
+    TruncatedSVD(n_components=210),
+    verbose=True
+)
 
-# transformation sur le titre et les answers
-question_tfidftransformed = tfidftransformer.fit_transform(X_question)
+answer_tfidf_acp_pipe = make_pipeline(
+    cl.Squeezer(),
+    tfidftransformer,
+    TruncatedSVD(n_components=250),
+    verbose=True
+)
 
-n_components = 251
-question_pca = TruncatedSVD(n_components=n_components)
-question_tfidftransformed_acp = question_pca.fit_transform(question_tfidftransformed)
+cat_host_ohe = OneHotEncoder(drop='first', sparse=False)
 
-title_tfidftransformed = tfidftransformer.fit_transform(X_title)
+tfidf_ohe_ct = make_column_transformer(
+    (title_tfidf_acp_pipe, 0),
+    (question_tfidf_acp_pipe, 1),
+    (answer_tfidf_acp_pipe, 2),
+    (cat_host_ohe, [3,4]),
+    verbose=True,
+    remainder='passthrough'
+)
 
-n_components = 15
-title_pca = TruncatedSVD(n_components=n_components)
-title_tfidftransformed_acp = title_pca.fit_transform(question_tfidftransformed)
+X_train_transformed = tfidf_ohe_ct.fit_transform(X_train)
 
 # degré de proximité entre title/answer et question/answer
 # TODO : refaire la similarité, les matrices n'ont plus la même taille.
@@ -162,32 +167,6 @@ title_tfidftransformed_acp = title_pca.fit_transform(question_tfidftransformed)
 #                                               question_tfidftransformed).diagonal()
 # question_answer_similarity = cosine_similarity(question_tfidftransformed, 
 #                                                answer_tfidftransformed).diagonal()
-
-X_transformed = pd.concat([
-    question_nblines,
-    answer_nblines,
-    question_nbchars,
-    answer_nbchars,
-    title_nbchars,
-    question_numbers,
-    answer_numbers,
-    title_numbers,
-    question_links,
-    answer_links,
-    question_demonstrations,
-    answer_demonstrations,
-    # title_answer_similarity,
-    # title_question_similarity,
-    # question_answer_similarity,
-    title_tfidftransformed_acp,
-    question_tfidftransformed_acp, 
-    answer_tfidftransformed_acp,
-    X_category
-])
-
-X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                    y_transformed,
-                                                    test_size=0.15)
 
 dtc = DecisionTreeClassifier(max_depth=5)
 dtc_multi = MultiOutputClassifier(dtc, n_jobs=-1)
