@@ -191,3 +191,125 @@ X_train_transformed = cnp.do_and_stack_cosine(
     X_train_transformed,
     X_train
 )
+
+# for test usage:
+# X_test_transformed = cp.do_and_stack_cosine(
+#     cosine_tfidftransformer,
+#     tfidf_ohe_ct.transform(X_test),
+#     X_test
+# )
+
+# test Multiple models
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_validate
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import make_multilabel_classification
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import RegressorChain
+
+X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
+
+clf_rfr = RandomForestRegressor(random_state=0)
+
+param_grid_rfr = [{'n_estimators': [10, 50, 100],
+                   'min_samples_leaf': [1, 3, 5],
+                   'max_features': ['sqrt', 'log2']}]
+
+
+clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
+
+param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
+                   'base_estimator__min_samples_leaf': [1, 3, 5],
+                   'base_estimator__max_features': ['sqrt', 'log2']}]
+
+gridcvs={}
+
+for pgrid, clf, name in zip((param_grid_rfr,
+                             param_grid_chain),
+                            (clf_rfr, 
+                             clf_chain),
+                            ('RFR', 'chained_RFR')):
+    gcv = GridSearchCV(clf,
+                       pgrid,
+                       cv=3,
+                       refit=True)
+    gridcvs[name] = gcv
+
+
+outer_cv = KFold(n_splits=3, shuffle=True)
+outer_scores = {}
+
+for name, gs in gridcvs.items():
+    nested_score = cross_val_score(gs, 
+                                   X_train, 
+                                   y_train, cv=outer_cv)
+    outer_scores[name] = nested_score
+    
+outer_scores
+
+chain = gridcvs['chained_RFR']
+chain.fit(X_train, y_train)
+
+chain.best_params_
+
+rfr = gridcvs['RFR']
+rfr.fit(X_train, y_train)
+
+import numpy as np 
+from scipy import stats
+
+y_pred = rfr.predict(X_test)
+corrs=[]
+for col in range(len(y_test.columns)):
+    corr = stats.spearmanr(pd.DataFrame(y_pred).iloc[:,col], y_test.iloc[:,col])
+    corrs.append(corr.correlation)
+
+mean_spearman = np.mean(corrs)
+
+mean_spearman
+
+'''
+
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_validate
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import make_multilabel_classification
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import ClassifierChain
+from sklearn.multioutput import RegressorChain
+
+
+X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
+
+
+clf_rfr = RandomForestRegressor(random_state=0)
+
+param_grid_rfr = [{'n_estimators': [10, 50, 100],
+                   'min_samples_leaf': [1, 3, 5],
+                   'max_features': ['sqrt', 'log2']}]
+
+
+clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
+
+param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
+                   'base_estimator__min_samples_leaf': [1, 3, 5],
+                   'base_estimator__max_features': ['sqrt', 'log2']}]
+
+
+gcv = GridSearchCV(clf_chain,param_grid_chain,cv=3, refit=True)
+
+y_train = y_train.iloc[:, 0:3]
+y_test = y_test.iloc[:,0:3]
+
+gcv.fit(X_train, y_train)
+y_pred = gcv.predict(X_train)
+'''
