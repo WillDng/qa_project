@@ -9,6 +9,7 @@ import sklearn.feature_extraction.text as txt
 
 from paths import joblib_dir
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
@@ -27,9 +28,7 @@ train = pd.read_csv('data/train.csv')
 y = train.iloc[:, 11:]
 
 # transformation des targets variables catégorielles
-y_transformed = y.apply(lambda x: pd.cut(x,
-                        [-0.1, .25, .5, .75, 1.1],
-                        labels=['low', 'medium-', 'medium+', 'high']))
+y_transformed = y
 
 # séparation en cas d'études séparés sur les questions ou answers
 y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
@@ -193,11 +192,17 @@ X_train_transformed = cnp.do_and_stack_cosine(
 )
 
 # for test usage:
-# X_test_transformed = cp.do_and_stack_cosine(
-#     cosine_tfidftransformer,
-#     tfidf_ohe_ct.transform(X_test),
-#     X_test
-# )
+X_test_transformed = cnp.do_and_stack_cosine(
+    cosine_tfidftransformer,
+    tfidf_ohe_ct.transform(X_test),
+    X_test
+)
+
+norm_transformer = StandardScaler().fit(X_train_transformed)
+X_train_transformed = norm_transformer.transform(X_train_transformed)
+X_test_transformed = norm_transformer.transform(X_test_transformed)
+X_train = X_train_transformed
+X_test = X_test_transformed
 
 # test Multiple models
 
@@ -212,14 +217,11 @@ from sklearn.multioutput import MultiOutputClassifier
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import RegressorChain
 
-X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
-
 clf_rfr = RandomForestRegressor(random_state=0)
 
 param_grid_rfr = [{'n_estimators': [10, 50, 100],
                    'min_samples_leaf': [1, 3, 5],
                    'max_features': ['sqrt', 'log2']}]
-
 
 clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
 
@@ -274,6 +276,7 @@ mean_spearman = np.mean(corrs)
 mean_spearman
 
 '''
+# test 1 model
 
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import KFold
@@ -286,10 +289,6 @@ from sklearn.multioutput import MultiOutputClassifier
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import ClassifierChain
 from sklearn.multioutput import RegressorChain
-
-
-X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
-
 
 clf_rfr = RandomForestRegressor(random_state=0)
 
@@ -313,3 +312,20 @@ y_test = y_test.iloc[:,0:3]
 gcv.fit(X_train, y_train)
 y_pred = gcv.predict(X_train)
 '''
+'''
+# test avec le cut sur les target
+y_test_cut= y_test.apply(lambda x: pd.cut(x,
+                        [-0.1, .25, .5, .75, 1.1],
+                        labels=['low', 'medium-', 'medium+', 'high']))
+
+y_pred_cut= pd.DataFrame(y_pred).apply(lambda x: pd.cut(x,
+                        [-0.1, .25, .5, .75, 1.1],
+                        labels=['low', 'medium-', 'medium+', 'high']))
+
+from sklearn.metrics import accuracy_score
+scores=[]
+for col in range(len(y_test.columns)):
+    scores.append(accuracy_score(y_test_cut.iloc[:,col], y_pred_cut.iloc[:,col]))
+    
+mean_scores = np.mean(scores)
+mean_scores
