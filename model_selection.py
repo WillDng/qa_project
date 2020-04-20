@@ -24,9 +24,10 @@ train = pd.read_csv('train.csv')
 y = train.iloc[:, 11:]
 
 # transformation des targets variables catégorielles
-y_transformed = y.apply(lambda x: pd.cut(x,
-                        [-0.1, .25, .5, .75, 1.1],
-                        labels=['low', 'medium-', 'medium+', 'high']))
+#y_transformed = y.apply(lambda x: pd.cut(x,
+#                        [-0.1, .25, .5, .75, 1.1],
+#                        labels=['low', 'medium-', 'medium+', 'high']))
+y_transformed=y
 
 # séparation en cas d'études séparés sur les questions ou answers
 y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
@@ -137,151 +138,134 @@ for col, label in [(question_nblines, 'question_nblines'),
                     (question_demonstrations, 'question_demonstrations'),
                     (answer_demonstrations, 'answer_demonstrations')]:
     X_transformed[label]=col
+    
+X_transformed = X_transformed.merge(pd.DataFrame(title_tfidftransformed_acp), 
+                                    on=X_transformed.index).drop('key_0', axis=1)
+X_transformed = X_transformed.merge(pd.DataFrame(question_tfidftransformed_acp), 
+                                    on=X_transformed.index).drop('key_0', axis=1)
+X_transformed = X_transformed.merge(pd.DataFrame(answer_tfidftransformed_acp), 
+                                    on=X_transformed.index).drop('key_0', axis=1)
+X_transformed = X_transformed.merge(pd.DataFrame(X_category.toarray()), 
+                                    on=X_transformed.index).drop('key_0', axis=1)
 
-X_transformed = X_transformed.merge(pd.DataFrame(title_tfidftransformed_acp), on=X_transformed.index).drop('key_0', axis=1)
-X_transformed = X_transformed.merge(pd.DataFrame(question_tfidftransformed_acp), on=X_transformed.index).drop('key_0', axis=1)
-X_transformed = X_transformed.merge(pd.DataFrame(answer_tfidftransformed_acp), on=X_transformed.index).drop('key_0', axis=1)
+l=[]
 
-# TODO ajouter les colonnes X_category
-#import scipy.sparse
-#X_transformed = X_transformed.merge(pd.DataFrame.sparse.from_spmatrix(X_category), on=X_transformed.index).drop('key_0', axis=1)
+for col in list(y_transformed.columns):
+    for item in y_transformed[col].unique():
+        l.append(item)
+set(l)
+
+# test Multiple models
 
 from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold
 from sklearn.model_selection import cross_validate
 from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.datasets import make_multilabel_classification
 from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import RegressorChain
 
-#+++++++++++++++++++++++++++++VERSION 1++++++++++++++++++++++++++++++++++++
-#single target by single target 
-X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                    y_transformed,
-                                                    test_size=0.15)
+X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
 
-clf_dtc = DecisionTreeClassifier(random_state=222)
-clf_rf = RandomForestClassifier(n_jobs=-1, random_state=222)
-'''
-params = {'booster':'gbtree', 'learning_rate': 1, 'objective': 'binary:logistic'}
-clf_xgb = xgb.train(params = params,
-                dtrain = train,
-                num_boost_round=100,
-                nfold= 3,
-                early_stopping_rounds= 60)
-train = xgb.DMatrix(X_train,y_train)
-test = xgb.DMatrix(X_test, y_test)
+clf_rfr = RandomForestRegressor(random_state=0)
 
-'''
-
-param_grid_dtc  = [{'min_samples_leaf': [1, 3, 5],
-                   'max_features': ['sqrt', 'log2']}]
-
-param_grid_rf  = [{'n_estimators': [10, 50, 100],
+param_grid_rfr = [{'n_estimators': [10, 50, 100],
                    'min_samples_leaf': [1, 3, 5],
                    'max_features': ['sqrt', 'log2']}]
 
 
-#param_grid_xgb = [{'learning_rate': [0.01, 0.1, 0.3, 0.5, 1],
-#                   'max_depth': [1, 3, 6, 8]}]
+clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
 
-def single_score(name, clf, param_grid):
-    X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                    y_transformed,
-                                                    test_size=0.15, random_state=222)
-    y_train=y_train[name]
-    gridcvs = {}
-    gcv = GridSearchCV(clf,param_grid,cv=3,refit=True)
-    gcv.fit(X_train, y_train)
-    mean = gcv.cv_results_['mean_test_score']
-    params = gcv.cv_results_['params']
-    return mean, params
+param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
+                   'base_estimator__min_samples_leaf': [1, 3, 5],
+                   'base_estimator__max_features': ['sqrt', 'log2']}]
 
-df = pd.DataFrame()
-for i, col in enumerate(list(y_train.columns)):
-    if i==0:
-        df['params']= single_score(col, clf_dtc, param_grid_dtc)[1]
-    df['score_'+col]=single_score(col, clf_dtc, param_grid_dtc)[0]
-    
-df
+gridcvs={}
 
-#+++++++++++++++++++++++++++++VERSION 2++++++++++++++++++++++++++++++++++++
-#avec MultiOutputClassifier, problème : les scores sont très très bas (??)
-
-X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                    y_transformed,
-                                                    test_size=0.15)
-
-y_train=y_train.iloc[:,1:5]
-
-clf_rf = MultiOutputClassifier(RandomForestClassifier(n_jobs=-1, random_state=222))
-clf_dtc = MultiOutputClassifier(DecisionTreeClassifier(random_state=222))
-
-'''
-params = {'booster':'gbtree', 'learning_rate': 1, 'objective': 'binary:logistic'}
-clf_xgb = xgb.train(params = params,
-                dtrain = train,
-                num_boost_round=100,
-                nfold= 3,
-                early_stopping_rounds= 60)
-train = xgb.DMatrix(X_train,y_train)
-test = xgb.DMatrix(X_test, y_test)
-
-'''
-
-param_grid_dtc  = [{'estimator__min_samples_leaf': [1, 3, 5],
-                   'estimator__max_features': ['sqrt', 'log2']}]
-
-param_grid_rf  = [{'estimator__n_estimators': [10, 50, 100],
-                   'estimator__min_samples_leaf': [1, 3, 5],
-                   'estimator__max_features': ['sqrt', 'log2']}]
-
-
-#param_grid_xgb = [{'learning_rate': [0.01, 0.1, 0.3, 0.5, 1],
-#                   'max_depth': [1, 3, 6, 8]}]
-
-gridcvs = {}
-
-'''for pgrid, clf, name in zip((param_grid_dtc,
-                             param_grid_rf),
-                            (clf_dtc, 
-                             clf_rf),
-                            ('DC', 'RF')):
+for pgrid, clf, name in zip((param_grid_rfr,
+                             param_grid_chain),
+                            (clf_rfr, 
+                             clf_chain),
+                            ('RFR', 'chained_RFR')):
     gcv = GridSearchCV(clf,
                        pgrid,
                        cv=3,
                        refit=True)
     gridcvs[name] = gcv
-'''
-gcv = GridSearchCV(clf_dtc,param_grid_dtc,cv=3,refit=True)
-gridcvs['DC'] = gcv
-gcv.fit(X_train, y_train)
 
-'''
-outer_cv = StratifiedKFold(n_splits=3, shuffle=True)
+
+outer_cv = KFold(n_splits=3, shuffle=True)
 outer_scores = {}
 
 for name, gs in gridcvs.items():
     nested_score = cross_val_score(gs, 
                                    X_train, 
-                                   y_train)
+                                   y_train, cv=outer_cv)
     outer_scores[name] = nested_score
     
 outer_scores
+
+chain = gridcvs['chained_RFR']
+chain.fit(X_train, y_train)
+
+chain.best_params_
+
+rfr = gridcvs['RFR']
+rfr.fit(X_train, y_train)
+
+import numpy as np 
+from scipy import stats
+
+y_pred = rfr.predict(X_test)
+corrs=[]
+for col in range(len(y_test.columns)):
+    corr = stats.spearmanr(pd.DataFrame(y_pred).iloc[:,col], y_test.iloc[:,col])
+    corrs.append(corr.correlation)
+
+mean_spearman = np.mean(corrs)
+
+mean_spearman
+
 '''
-mean = gcv.cv_results_['mean_test_score']
-params = gcv.cv_results_['params']
 
-df2=pd.DataFrame({'params':params, 'score':mean})
-df2
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_validate
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import make_multilabel_classification
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import ClassifierChain
+from sklearn.multioutput import RegressorChain
 
-#Je n'arrive pas à faire des folds et donc une crossval avec des target multiples
 
-X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                    y_transformed,
-                                                    test_size=0.15)
-skf = StratifiedKFold(n_splits=3, shuffle=True)
+X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
 
-for train_index, test_index in skf.split(X_train, y_train):
-    print(train_index,test_index)
+
+clf_rfr = RandomForestRegressor(random_state=0)
+
+param_grid_rfr = [{'n_estimators': [10, 50, 100],
+                   'min_samples_leaf': [1, 3, 5],
+                   'max_features': ['sqrt', 'log2']}]
+
+
+clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
+
+param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
+                   'base_estimator__min_samples_leaf': [1, 3, 5],
+                   'base_estimator__max_features': ['sqrt', 'log2']}]
+
+
+gcv = GridSearchCV(clf_chain,param_grid_chain,cv=3, refit=True)
+
+y_train = y_train.iloc[:, 0:3]
+y_test = y_test.iloc[:,0:3]
+
+gcv.fit(X_train, y_train)
+y_pred = gcv.predict(X_train)
+'''
