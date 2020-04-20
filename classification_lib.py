@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import re
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -13,7 +14,7 @@ def clean_text_re(text, pattern):
     if not matches:
         return new_text
     for matching_text in matches:
-        new_text = new_text.replace(matching_text, '')
+        new_text = new_text.replace(matching_text, ' ')
     return new_text
 
 
@@ -119,3 +120,8 @@ class LemmaTfidfVectorizer(TfidfVectorizer):
         tokenize = super().build_tokenizer()
         lemmatizer = WordNetLemmatizer()
         return lambda doc: [lemmatizer.lemmatize(t) for t in tokenize(doc)]
+
+
+def format_cosine(array):
+    """Format cosine result in order to hstack"""
+    return np.expand_dims(array, axis=1).astype(float)

@@ -50,7 +50,7 @@ joblib.dump(answer_pca, answer_joblib_path)
 
 question_tfidftransformed = tfidftransformer.transform(X_question)
 
-n_components = 400
+n_components = 390
 question_pca = TruncatedSVD(n_components=n_components)
 question_pca.fit(question_tfidftransformed)
 
@@ -75,7 +75,7 @@ joblib.dump(question_pca, question_joblib_path)
 # best_features_question = [vocab[i] for i in pca2.components_[0].argsort()[::-1]]    
 title_tfidftransformed = tfidftransformer.transform(X_title)
 
-n_components = 20
+n_components = 25
 title_pca = TruncatedSVD(n_components=n_components)
 title_pca.fit(title_tfidftransformed)
 

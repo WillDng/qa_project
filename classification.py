@@ -1,6 +1,7 @@
 import sklearn
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import scipy.sparse as sp
 import re
 import joblib
@@ -12,12 +13,12 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import  TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import TruncatedSVD
 from sklearn.pipeline import Pipeline, make_pipeline, make_union
 from sklearn.compose import make_column_transformer
 
 import classification_lib as cl
+import cosine_normalisation_pipeline as cnp
 import stop_words_perso as swp 
 import mispell_dict as md
 
@@ -50,7 +51,7 @@ chars_re = r'.'
 
 numbers_re = r'\d\.?\d*'
 links_re = r'www[^\s]*(?=\s)|http[^\s]*(?=\s)'
-demonstrations_re = r'(?<=\n).*[&\^=\+\_\[\]\{\}\\\|]+.*(?=\n)'
+demonstrations_re = r'(?<=\n).*[&\^=\+\_\[\]\{\}\|]+.*(?=\n)'
 belonging_re = r'\'s'
 # TODO: densité de ponctuation ?
 # question_mark = r'\?'
@@ -116,7 +117,23 @@ for words in swp.stop_words_to_remove:
 stop_words += swp.cs_stop_words \
               + swp.generated_during_tokenizing
 
-tfidftransformer = cl.LemmaTfidfVectorizer(
+title_tfidftransformer = cl.LemmaTfidfVectorizer(
+    sublinear_tf=True,
+    stop_words=stop_words,
+    min_df=0.015,
+    max_df=0.85,
+    ngram_range=(1,2)
+)
+
+question_tfidftransformer = cl.LemmaTfidfVectorizer(
+    sublinear_tf=True,
+    stop_words=stop_words,
+    min_df=0.015,
+    max_df=0.85,
+    ngram_range=(1,2)
+)
+
+answer_tfidftransformer = cl.LemmaTfidfVectorizer(
     sublinear_tf=True,
     stop_words=stop_words,
     min_df=0.015,
@@ -126,21 +143,21 @@ tfidftransformer = cl.LemmaTfidfVectorizer(
 
 title_tfidf_acp_pipe = make_pipeline(
     cl.Squeezer(),
-    tfidftransformer,
+    title_tfidftransformer,
     TruncatedSVD(n_components=15),
     verbose=True
 )
 
 question_tfidf_acp_pipe = make_pipeline(
     cl.Squeezer(),
-    tfidftransformer,
-    TruncatedSVD(n_components=210),
+    question_tfidftransformer,
+    TruncatedSVD(n_components=220),
     verbose=True
 )
 
 answer_tfidf_acp_pipe = make_pipeline(
     cl.Squeezer(),
-    tfidftransformer,
+    answer_tfidftransformer,
     TruncatedSVD(n_components=250),
     verbose=True
 )
@@ -156,43 +173,21 @@ tfidf_ohe_ct = make_column_transformer(
     remainder='passthrough'
 )
 
-X_train_transformed = tfidf_ohe_ct.fit_transform(X_train)
+X_train_transformed = tfidf_ohe_ct.fit_transform(X_train).astype(float)
 
-# degré de proximité entre title/answer et question/answer
-# TODO : refaire la similarité, les matrices n'ont plus la même taille.
-# il faudra probablement récupérer le vocabulaire commun pour fitter et transformer
-# title_answer_similarity = cosine_similarity(title_tfidftransformed, 
-#                                             answer_tfidftransformed).diagonal()
-# title_question_similarity = cosine_similarity(title_tfidftransformed, 
-#                                               question_tfidftransformed).diagonal()
-# question_answer_similarity = cosine_similarity(question_tfidftransformed, 
-#                                                answer_tfidftransformed).diagonal()
+cosine_tfidftransformer = cl.LemmaTfidfVectorizer(
+    sublinear_tf=True,
+    ngram_range=(1,2)
+)
 
-dtc = DecisionTreeClassifier(max_depth=5)
-dtc_multi = MultiOutputClassifier(dtc, n_jobs=-1)
+cosine_tfidftransformer.fit(
+    X_train.question_title
+    + ' ' + X_train.question_body
+    + ' ' + X_train.answer
+)
 
-dtc_multi.fit(X_train, y_train)
-dtc_multi.score(X_test, y_test)
-
-def transform_split_score(X, y):
-    if isinstance(X, list):
-        X_transformed = sp.hstack(X[text_var].apply(lambda col: vectorizer.fit_transform(col)))
-    X_transformed = vectorizer.fit_transform(X)
-    X_train, X_test, y_train, y_test = train_test_split(X_transformed,
-                                                        y,
-                                                        test_size=0.15)
-    dtc_multi.fit(X_train, y_train)
-    return dtc_multi.score(X_test, y_test)
-
-# tree interpretation
-
-# feats = {}
-# for feature, importance in zip(XXX.columns, dtc.feature_importances_):
-#     feats[feature] = importance
-# importances = pd.DataFrame.from_dict(feats, orient='index').rename(columns={0: 'Importance'})
-# importances.sort_values(by='Importance', ascending = False ).head(8)
-
-# affichage de l'arbre de décision
-
-# fig, ax = plt.subplots(figsize=(20, 20))
-# sklearn.tree.plot_tree(dtc, ax=ax, filled=True)
+X_train_transformed = cnp.do_and_stack_cosine(
+    cosine_tfidftransformer,
+    X_train_transformed,
+    X_train
+)
