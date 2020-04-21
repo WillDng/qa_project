@@ -8,7 +8,7 @@ import joblib
 import sklearn.feature_extraction.text as txt
 
 from paths import joblib_dir
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, KBinsDiscretizer
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
@@ -28,21 +28,21 @@ y = train.iloc[:, 11:]
 
 # transformation des targets variables catégorielles
 y_transformed = y.apply(lambda x: pd.cut(x,
-                        [-0.1, .25, .5, .75, 1.1],
-                        labels=['low', 'medium-', 'medium+', 'high']))
+                        np.linspace(-0.001, 1.001, 11),
+                        labels=np.linspace(0, 9, 10))).astype(float)
 
 # séparation en cas d'études séparés sur les questions ou answers
-y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
-y_answer = y_transformed.loc[:, y_transformed.columns.str.startswith('answer')]
+# y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
+# y_answer = y_transformed.loc[:, y_transformed.columns.str.startswith('answer')]
 
-to_delete_var = ['qa_id', 'url',
-                 'question_user_name', 'question_user_page',
-                 'answer_user_name', 'answer_user_page']
+# to_delete_var = ['qa_id', 'url',
+#                  'question_user_name', 'question_user_page',
+#                  'answer_user_name', 'answer_user_page']
 
-X = train.iloc[:, :11].drop(to_delete_var, 1)
-X_title = train.question_title
-X_question = train.question_body
-X_answer = train.answer
+# X = train.iloc[:, :11].drop(to_delete_var, 1)
+# X_title = train.question_title
+# X_question = train.question_body
+# X_answer = train.answer
 
 # nombre de lignes avec passage à la ligne comme proxy
 linebreak_re = r'\n'
@@ -192,12 +192,27 @@ X_train_transformed = cnp.do_and_stack_cosine(
     X_train
 )
 
-# for test usage:
-# X_test_transformed = cp.do_and_stack_cosine(
+X_test_transformed = cnp.do_and_stack_cosine(
+    cosine_tfidftransformer,
+    tfidf_ohe_ct.transform(X_test),
+    X_test
+)
+
+# dtc = MultiOutputClassifier(
+#         DecisionTreeClassifier(
+#         class_weight='balanced'
+#     )
+# )
+
+# dtc.fit(X_train_transformed, y_train)
+# X_test_transformed = cnp.do_and_stack_cosine(
 #     cosine_tfidftransformer,
 #     tfidf_ohe_ct.transform(X_test),
 #     X_test
 # )
+# y_pred = dtc.predict(X_test_transformed)
+
+
 
 # test Multiple models
 
@@ -212,104 +227,68 @@ from sklearn.multioutput import MultiOutputClassifier
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import RegressorChain
 
-X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
+clf_dtc = MultiOutputClassifier(DecisionTreeClassifier(
+    class_weight='balanced'
+))
+clf_rfc = MultiOutputClassifier(RandomForestClassifier(
+    class_weight='balanced_subsample',
+    n_jobs=3
+))
 
-clf_rfr = RandomForestRegressor(random_state=0)
+param_grid_dtc  = [
+    {
+        'estimator__min_samples_leaf': [1, 3, 5],
+        'estimator__max_features': ['sqrt', 'log2']
+    }
+]
 
-param_grid_rfr = [{'n_estimators': [10, 50, 100],
-                   'min_samples_leaf': [1, 3, 5],
-                   'max_features': ['sqrt', 'log2']}]
-
-
-clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
-
-param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
-                   'base_estimator__min_samples_leaf': [1, 3, 5],
-                   'base_estimator__max_features': ['sqrt', 'log2']}]
+param_grid_rfc  = [
+    {
+        'estimator__n_estimators': [10, 50, 100],
+        'estimator__min_samples_leaf': [1, 3, 5],
+        'estimator__max_features': ['sqrt', 'log2'],
+    }
+]
 
 gridcvs={}
 
-for pgrid, clf, name in zip((param_grid_rfr,
-                             param_grid_chain),
-                            (clf_rfr, 
-                             clf_chain),
-                            ('RFR', 'chained_RFR')):
+for pgrid, clf, name in zip(
+    (param_grid_dtc, param_grid_rfc),
+    (clf_dtc, clf_rfc),
+    ('multi_dtc', 'multi_rf')
+):
     gcv = GridSearchCV(clf,
                        pgrid,
-                       cv=3,
-                       refit=True)
+                       cv=2,
+                       refit=True,
+                       scoring=cl.custom_accu_score,
+                       n_jobs=3,
+                       verbose=True)
     gridcvs[name] = gcv
 
-
-outer_cv = KFold(n_splits=3, shuffle=True)
+outer_cv = KFold(n_splits=2, shuffle=True)
 outer_scores = {}
 
+# y_train_sample=y_train.iloc[:,:2]
+
 for name, gs in gridcvs.items():
-    nested_score = cross_val_score(gs, 
-                                   X_train, 
-                                   y_train, cv=outer_cv)
+
+    nested_score = cross_val_score(
+        gs, 
+        X_train_transformed, 
+        y_train, 
+        cv=outer_cv,
+        scoring=cl.custom_accu_score,
+        n_jobs=3,
+        verbose=1
+    )
     outer_scores[name] = nested_score
-    
-outer_scores
+    print(f'{name}: outer accuracy {100*nested_score.mean():.2f} +/- {100*nested_score.std():.2f}')
 
-chain = gridcvs['chained_RFR']
-chain.fit(X_train, y_train)
+selected_model = gridcvs['multi_rf']
+selected_model.fit(
+    X_train_transformed,
+    y_train
+)
 
-chain.best_params_
-
-rfr = gridcvs['RFR']
-rfr.fit(X_train, y_train)
-
-import numpy as np 
-from scipy import stats
-
-y_pred = rfr.predict(X_test)
-corrs=[]
-for col in range(len(y_test.columns)):
-    corr = stats.spearmanr(pd.DataFrame(y_pred).iloc[:,col], y_test.iloc[:,col])
-    corrs.append(corr.correlation)
-
-mean_spearman = np.mean(corrs)
-
-mean_spearman
-
-'''
-
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import KFold
-from sklearn.model_selection import cross_validate
-from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.datasets import make_multilabel_classification
-from sklearn.multioutput import MultiOutputClassifier
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.multioutput import ClassifierChain
-from sklearn.multioutput import RegressorChain
-
-
-X_train, X_test, y_train, y_test = train_test_split(X_transformed, y_transformed, test_size=.2, random_state=111)
-
-
-clf_rfr = RandomForestRegressor(random_state=0)
-
-param_grid_rfr = [{'n_estimators': [10, 50, 100],
-                   'min_samples_leaf': [1, 3, 5],
-                   'max_features': ['sqrt', 'log2']}]
-
-
-clf_chain = RegressorChain(RandomForestRegressor(random_state=0), order=None, cv=None, random_state=0)
-
-param_grid_chain = [{'base_estimator__n_estimators': [10, 50, 100],
-                   'base_estimator__min_samples_leaf': [1, 3, 5],
-                   'base_estimator__max_features': ['sqrt', 'log2']}]
-
-
-gcv = GridSearchCV(clf_chain,param_grid_chain,cv=3, refit=True)
-
-y_train = y_train.iloc[:, 0:3]
-y_test = y_test.iloc[:,0:3]
-
-gcv.fit(X_train, y_train)
-y_pred = gcv.predict(X_train)
-'''
+print(selected_model.best_params_)
