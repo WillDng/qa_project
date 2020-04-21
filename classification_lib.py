@@ -1,8 +1,10 @@
 import numpy as np
+from scipy import stats
 import pandas as pd
 import re
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import  TfidfVectorizer
+from sklearn.metrics import make_scorer
 from nltk import word_tokenize          
 from nltk.stem import WordNetLemmatizer 
 import mispell_dict as md 
@@ -125,3 +127,34 @@ class LemmaTfidfVectorizer(TfidfVectorizer):
 def format_cosine(array):
     """Format cosine result in order to hstack"""
     return np.expand_dims(array, axis=1).astype(float)
+
+
+def spearman_score(
+    y_true, 
+    y_pred, 
+    **kwargs
+):
+    spearman_corr = stats.spearmanr(
+        y_true,
+        y_pred,
+        axis=1
+    ).correlation
+    return np.mean(spearman_corr)
+
+custom_spearman_score = make_scorer(
+    spearman_score,
+    greater_is_better=True
+)
+
+def accu_score(
+    y_true, 
+    y_pred, 
+    **kwargs
+):
+    corresp = y_pred == y_true
+    return corresp.sum().sum() / (y_true.shape[0] * y_true.shape[1])
+
+custom_accu_score = make_scorer(
+    accu_score,
+    greater_is_better=True
+)
