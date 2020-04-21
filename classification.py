@@ -36,19 +36,6 @@ y_transformed = y.apply(lambda x: pd.cut(x,
                         np.linspace(-0.001, 1.001, 11),
                         labels=np.linspace(0, 9, 10))).astype(float)
 
-# séparation en cas d'études séparés sur les questions ou answers
-# y_question = y_transformed.loc[:, y_transformed.columns.str.startswith('question')]
-# y_answer = y_transformed.loc[:, y_transformed.columns.str.startswith('answer')]
-
-# to_delete_var = ['qa_id', 'url',
-#                  'question_user_name', 'question_user_page',
-#                  'answer_user_name', 'answer_user_page']
-
-# X = train.iloc[:, :11].drop(to_delete_var, 1)
-# X_title = train.question_title
-# X_question = train.question_body
-# X_answer = train.answer
-
 # nombre de lignes avec passage à la ligne comme proxy
 linebreak_re = r'\n'
 # longueur/verbosité avec nombre de caractères comme proxy
@@ -58,9 +45,6 @@ numbers_re = r'\d\.?\d*'
 links_re = r'www[^\s]*(?=\s)|http[^\s]*(?=\s)'
 demonstrations_re = r'(?<=\n).*[&\^=\+\_\[\]\{\}\|]+.*(?=\n)'
 belonging_re = r'\'s'
-# TODO: densité de ponctuation ?
-# question_mark = r'\?'
-
 
 count_encoder_union = make_union(
     cl.PatternCounter(chars_re),
@@ -203,42 +187,45 @@ X_test_transformed = cnp.do_and_stack_cosine(
     X_test
 )
 
-# dtc = MultiOutputClassifier(
-#         DecisionTreeClassifier(
-#         class_weight='balanced'
-#     )
-# )
-
-# dtc.fit(X_train_transformed, y_train)
-# X_test_transformed = cnp.do_and_stack_cosine(
-#     cosine_tfidftransformer,
-#     tfidf_ohe_ct.transform(X_test),
-#     X_test
-# )
-# y_pred = dtc.predict(X_test_transformed)
-
-
-
-# test Multiple models
-
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import KFold
-from sklearn.model_selection import cross_validate
 from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.datasets import make_multilabel_classification
 from sklearn.multioutput import MultiOutputClassifier
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import RegressorChain
+from xgboost import XGBClassifier
 
-clf_dtc = MultiOutputClassifier(DecisionTreeClassifier(
-    class_weight='balanced'
-))
-clf_rfc = MultiOutputClassifier(RandomForestClassifier(
-    class_weight='balanced_subsample',
+clf_dtc = MultiOutputClassifier(
+    DecisionTreeClassifier(
+        class_weight='balanced'
+    ),
     n_jobs=3
-))
+)
+clf_rfc = MultiOutputClassifier(
+    RandomForestClassifier(
+        class_weight='balanced_subsample',
+        n_jobs=3
+    ),
+    n_jobs=3
+)
+
+clf_xgb = MultiOutputClassifier(
+    XGBClassifier(
+        objective='multi:softmax',
+        n_jobs=3,
+        verbosity=1,
+        num_class=10,
+        booster='gbtree',
+        importance_type='gain',
+        scale_pos_weight=0.8,
+        max_depth=5,
+        gamma=0,
+        subsample=0.8,
+        colsample_bytree=0.8,
+    ),
+    n_jobs=3
+)
 
 param_grid_dtc  = [
     {
@@ -249,29 +236,36 @@ param_grid_dtc  = [
 
 param_grid_rfc  = [
     {
-        'estimator__n_estimators': [10, 50, 100],
+        'estimator__n_estimators': [5, 40, 100],
         'estimator__min_samples_leaf': [1, 3, 5],
         'estimator__max_features': ['sqrt', 'log2'],
+    }
+]
+
+param_grid_xgb  = [
+    {
+        'estimator__n_estimators': [5, 40, 100],
+        'estimator__learning_rate': [0.1, 0.6]
     }
 ]
 
 gridcvs={}
 
 for pgrid, clf, name in zip(
-    (param_grid_dtc, param_grid_rfc),
-    (clf_dtc, clf_rfc),
-    ('multi_dtc', 'multi_rf')
+    (param_grid_dtc, param_grid_rfc, param_grid_xgb),
+    (clf_dtc, clf_rfc, clf_xgb),
+    ('multi_dtc', 'multi_rf', 'multi_xgb')
 ):
     gcv = GridSearchCV(clf,
                        pgrid,
-                       cv=2,
+                       cv=3,
                        refit=True,
                        scoring=cl.custom_accu_score,
                        n_jobs=3,
                        verbose=True)
     gridcvs[name] = gcv
 
-outer_cv = KFold(n_splits=2, shuffle=True)
+outer_cv = KFold(n_splits=3, shuffle=True)
 outer_scores = {}
 
 # y_train_sample=y_train.iloc[:,:2]
@@ -290,7 +284,7 @@ for name, gs in gridcvs.items():
     outer_scores[name] = nested_score
     print(f'{name}: outer accuracy {100*nested_score.mean():.2f} +/- {100*nested_score.std():.2f}')
 
-selected_model = gridcvs['multi_rf']
+selected_model = gridcvs['multi_xgb']
 selected_model.fit(
     X_train_transformed,
     y_train
