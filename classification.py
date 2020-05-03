@@ -8,12 +8,8 @@ import joblib
 import sklearn.feature_extraction.text as txt
 
 from paths import joblib_dir
-<<<<<<< HEAD
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import StandardScaler
-=======
-from sklearn.preprocessing import OneHotEncoder, KBinsDiscretizer
->>>>>>> add dtc and rfc nested cv
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import train_test_split
@@ -28,13 +24,6 @@ import stop_words_perso as swp
 import mispell_dict as md
 
 train = pd.read_csv('data/train.csv')
-
-y = train.iloc[:, 11:]
-
-# transformation des targets variables catégorielles
-y_transformed = y.apply(lambda x: pd.cut(x,
-                        np.linspace(-0.001, 1.001, 11),
-                        labels=np.linspace(0, 9, 10))).astype(float)
 
 # nombre de lignes avec passage à la ligne comme proxy
 linebreak_re = r'\n'
@@ -81,24 +70,30 @@ cleaner_count_encoder_ct = make_column_transformer(
     verbose=True
 )
 
-X_transformed = pd.DataFrame(
-    data=cleaner_count_encoder_ct.fit_transform(train),
-    columns=[
-        'question_title', 'question_body', 'answer',
-        'category', 'host',
+count_encoder_ct_headers = [
         'title_chars',  'title_num', 'title_links', 'title_demo',
         'question_linebreak', 'question_chars', 'question_num', 
         'question_links', 'question_demo',
         'answer_linebreak', 'answer_chars', 'answer_num', 
         'answer_links', 'answer_demo'
-    ]
+]
+
+X_transformed = pd.DataFrame(
+    data=cleaner_count_encoder_ct.fit_transform(train),
+    columns=[
+        'question_title', 'question_body', 'answer',
+        'category', 'host',
+    ] + count_encoder_ct_headers
 )
 
 X_train, X_test, y_train, y_test = train_test_split(
     X_transformed,
-    y_transformed,
+    train.iloc[:, 11:],
     test_size=0.15
 )
+
+y_train_transformed = cl.discretize_targets(y_train)
+y_test_transformed = cl.discretize_targets(y_test)
 
 stop_words = list(txt.ENGLISH_STOP_WORDS)
 for words in swp.stop_words_to_remove:
@@ -114,12 +109,30 @@ title_tfidftransformer = cl.LemmaTfidfVectorizer(
     ngram_range=(1,2)
 )
 
+title_acp = TruncatedSVD(n_components=15)
+
+title_tfidf_acp_pipe = make_pipeline(
+    cl.Squeezer(),
+    title_tfidftransformer,
+    title_acp,
+    verbose=True
+)
+
 question_tfidftransformer = cl.LemmaTfidfVectorizer(
     sublinear_tf=True,
     stop_words=stop_words,
     min_df=0.015,
     max_df=0.85,
     ngram_range=(1,2)
+)
+
+question_acp = TruncatedSVD(n_components=220)
+
+question_tfidf_acp_pipe = make_pipeline(
+    cl.Squeezer(),
+    question_tfidftransformer,
+    question_acp,
+    verbose=True
 )
 
 answer_tfidftransformer = cl.LemmaTfidfVectorizer(
@@ -130,28 +143,18 @@ answer_tfidftransformer = cl.LemmaTfidfVectorizer(
     ngram_range=(1,2)
 )
 
-title_tfidf_acp_pipe = make_pipeline(
-    cl.Squeezer(),
-    title_tfidftransformer,
-    TruncatedSVD(n_components=15),
-    verbose=True
-)
-
-question_tfidf_acp_pipe = make_pipeline(
-    cl.Squeezer(),
-    question_tfidftransformer,
-    TruncatedSVD(n_components=220),
-    verbose=True
-)
+answer_acp = TruncatedSVD(n_components=250)
 
 answer_tfidf_acp_pipe = make_pipeline(
     cl.Squeezer(),
     answer_tfidftransformer,
-    TruncatedSVD(n_components=250),
+    answer_acp,
     verbose=True
 )
 
-cat_host_ohe = OneHotEncoder(drop='first', sparse=False)
+cat_host_ohe = OneHotEncoder(
+    sparse=False,
+    handle_unknown='ignore')
 
 tfidf_ohe_ct = make_column_transformer(
     (title_tfidf_acp_pipe, 0),
@@ -163,6 +166,17 @@ tfidf_ohe_ct = make_column_transformer(
 )
 
 X_train_transformed = tfidf_ohe_ct.fit_transform(X_train).astype(float)
+
+pipelines_headers = cl.get_pipelines_feature_names(
+    tfidf_ohe_ct,
+    [
+        ('pipeline-1', 'title'),
+        ('pipeline-2', 'question'),
+        ('pipeline-3', 'answer')
+    ]
+)
+
+ohe_headers = cl.get_ohe_headers(tfidf_ohe_ct)
 
 cosine_tfidftransformer = cl.LemmaTfidfVectorizer(
     sublinear_tf=True,
@@ -181,10 +195,31 @@ X_train_transformed = cnp.do_and_stack_cosine(
     X_train
 )
 
+cosine_headers = [
+    'cos_title_question',
+    'cos_title_answer',
+    'cos_question_answer'
+]
+
+columns_headers = pipelines_headers\
+                  + ohe_headers\
+                  + count_encoder_ct_headers\
+                  + cosine_headers
+
+X_train_transformed = pd.DataFrame(
+    X_train_transformed,
+    columns=columns_headers
+)
+
 X_test_transformed = cnp.do_and_stack_cosine(
     cosine_tfidftransformer,
     tfidf_ohe_ct.transform(X_test),
     X_test
+)
+
+X_test_transformed = pd.DataFrame(
+    X_test_transformed,
+    columns=columns_headers
 )
 
 from sklearn.model_selection import GridSearchCV
@@ -200,20 +235,23 @@ clf_dtc = MultiOutputClassifier(
     DecisionTreeClassifier(
         class_weight='balanced'
     ),
-    n_jobs=3
+    n_jobs=-1
 )
 clf_rfc = MultiOutputClassifier(
     RandomForestClassifier(
         class_weight='balanced_subsample',
-        n_jobs=3
+        n_jobs=-1,
+        oob_score=True,
+        max_depth=5,
+        max_features='sqrt'
     ),
-    n_jobs=3
+    n_jobs=-1
 )
 
 clf_xgb = MultiOutputClassifier(
     XGBClassifier(
         objective='multi:softmax',
-        n_jobs=3,
+        n_jobs=-1,
         verbosity=1,
         num_class=10,
         booster='gbtree',
@@ -224,7 +262,7 @@ clf_xgb = MultiOutputClassifier(
         subsample=0.8,
         colsample_bytree=0.8,
     ),
-    n_jobs=3
+    n_jobs=-1
 )
 
 param_grid_dtc  = [
@@ -236,16 +274,15 @@ param_grid_dtc  = [
 
 param_grid_rfc  = [
     {
-        'estimator__n_estimators': [5, 40, 100],
-        'estimator__min_samples_leaf': [1, 3, 5],
-        'estimator__max_features': ['sqrt', 'log2'],
+        'estimator__n_estimators': [10, 150, 300, 500],
+        'estimator__min_samples_leaf': [1, 5, 10],
     }
 ]
 
 param_grid_xgb  = [
     {
-        'estimator__n_estimators': [5, 40, 100],
-        'estimator__learning_rate': [0.1, 0.6]
+        'estimator__learning_rate': [0.1, 0.6],
+        'estimator__n_estimators': [10, 300, 500]
     }
 ]
 
@@ -254,40 +291,87 @@ gridcvs={}
 for pgrid, clf, name in zip(
     (param_grid_dtc, param_grid_rfc, param_grid_xgb),
     (clf_dtc, clf_rfc, clf_xgb),
-    ('multi_dtc', 'multi_rf', 'multi_xgb')
+    ('multi_dtc', 'multi_rfc', 'multi_xgb')
 ):
     gcv = GridSearchCV(clf,
                        pgrid,
                        cv=3,
                        refit=True,
                        scoring=cl.custom_accu_score,
-                       n_jobs=3,
+                       n_jobs=-1,
                        verbose=True)
     gridcvs[name] = gcv
 
 outer_cv = KFold(n_splits=3, shuffle=True)
 outer_scores = {}
 
-# y_train_sample=y_train.iloc[:,:2]
-
 for name, gs in gridcvs.items():
 
     nested_score = cross_val_score(
         gs, 
         X_train_transformed, 
-        y_train, 
+        y_train_transformed, 
         cv=outer_cv,
         scoring=cl.custom_accu_score,
-        n_jobs=3,
+        n_jobs=-1,
         verbose=1
     )
     outer_scores[name] = nested_score
     print(f'{name}: outer accuracy {100*nested_score.mean():.2f} +/- {100*nested_score.std():.2f}')
 
-selected_model = gridcvs['multi_xgb']
+selected_model = gridcvs['multi_rfc']
 selected_model.fit(
     X_train_transformed,
-    y_train
+    y_train_transformed
 )
 
 print(selected_model.best_params_)
+
+####
+
+clf_rfc = MultiOutputClassifier(
+    RandomForestClassifier(
+        class_weight='balanced_subsample',
+        n_jobs=-1,
+        n_estimators=300,
+        min_samples_leaf=1,
+        max_features='sqrt',
+        max_depth=5,
+    ),
+    n_jobs=-1
+)
+
+clf_rfc.fit(
+    X_train_transformed,
+    y_train_transformed
+)
+
+
+#####
+import shap
+import joblib
+
+shap_output = dict()
+
+for index, feat in enumerate(y_train.columns):
+    explainer = shap.TreeExplainer(clf_rfc.estimators_[index])
+    shap_values = explainer.shap_values(
+        X_test_transformed,
+        check_additivity=False        
+    )
+    joblib.dump(shap_values, 'joblib/'+'_'.join(['shap', feat]))
+    print('Done', index, feat)
+    shap_output[feat] = shap_values
+
+# pour les analyses globales
+shap.summary_plot(
+    shap_output['answer_type_instructions'],
+    X_test_transformed,
+    class_names=clf_rfc.classes_[-4]
+)
+
+# pour les analyses de classe
+shap.summary_plot(
+    shap_output['answer_type_instructions'][-1],
+    X_test_transformed
+)
