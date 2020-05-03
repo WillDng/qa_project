@@ -118,6 +118,7 @@ class Squeezer(TransformerMixin, BaseEstimator):
 
 
 class LemmaTfidfVectorizer(TfidfVectorizer):
+
     def build_tokenizer(self):
         tokenize = super().build_tokenizer()
         lemmatizer = WordNetLemmatizer()
@@ -158,3 +159,37 @@ custom_accu_score = make_scorer(
     accu_score,
     greater_is_better=True
 )
+
+def discretize_targets(sample):
+    return sample.apply(
+        lambda x: pd.cut(
+            x,
+            np.linspace(-0.001, 1.001, 11),
+            labels=np.linspace(0, 9, 10)
+        )
+    ).astype(float)
+
+def get_pipelines_feature_names(
+    column_transformer,
+    pipeline_args
+):
+    """
+    Extract the feature names from the pipeline made from LemmaTfidfVectorizer
+    and TruncatedSVD.
+    """
+    headers = list()
+    for pipeline_name, prefix in pipeline_args:
+        current_pipeline = column_transformer.named_transformers_[pipeline_name]
+        feature_names = current_pipeline['lemmatfidfvectorizer'].get_feature_names()
+        acp_components = current_pipeline['truncatedsvd'].components_
+        most_important_comp = [np.abs(line).argmax() for line in acp_components]
+        most_important_feat = ['_'.join([prefix, feature_names[index]])
+                               for index in most_important_comp]
+        headers.extend(most_important_feat)
+    return headers
+
+
+def get_ohe_headers(column_transformer):
+    ohe_headers = column_transformer.named_transformers_['onehotencoder']\
+        .categories_
+    return np.concatenate(ohe_headers).tolist()
